@@ -27,6 +27,7 @@ pip install pandas
 
 **示例 (my_conditions.csv):**
 
+```
 Well	Condition
 A1	1/2 TSB without bacteria
 A2	1/2 TSB without bacteria
@@ -36,6 +37,7 @@ A5	1/2 TSB
 A6	1/2 TSB
 ...	...
 D12	MM + 1%DMSO
+```
 
 ### 步骤 2: 运行脚本
 打开您的终端（或命令提示符），进入脚本所在的目录，然后使用以下结构运行命令：
@@ -59,8 +61,10 @@ python process_growth_data.py "raw_data.csv" --map "my_conditions.csv" -o "final
 ## 输出文件格式
 脚本会输出一个干净的 CSV 文件，包含以下列，可以直接用于后续分析：
 
+```
 Well	Time_s	Time_h	OD	Condition
 A1	0.0	0.0	0.101	1/2 TSB without bacteria
 A2	0.0	0.0	0.102	1/2 TSB without bacteria
 ...	...	...	...	...
 D12	86400.0	24.0	1.55	MM + 1%DMSO
+```
