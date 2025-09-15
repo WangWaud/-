@@ -2,8 +2,26 @@ import pandas as pd
 import re
 import argparse
 import sys
+import os
 
 def parse_plate_reader_data(file_path: str) -> pd.DataFrame:
+    """
+    Parses raw plate reader data from a CSV or Excel file exported from the instrument.
+
+    Args:
+      file_path (str): The path to the input file (CSV or Excel).
+
+    Returns:
+      A DataFrame with 'Well', 'Time_s', and 'OD' columns.
+    """
+    file_extension = os.path.splitext(file_path)[1].lower()
+    
+    if file_extension == '.xlsx' or file_extension == '.xls':
+        return parse_excel_plate_reader_data(file_path)
+    else:  # Default to CSV parsing
+        return parse_csv_plate_reader_data(file_path)
+
+def parse_csv_plate_reader_data(file_path: str) -> pd.DataFrame:
     """
     Parses raw plate reader data from a CSV file exported from the instrument.
 
@@ -41,21 +59,108 @@ def parse_plate_reader_data(file_path: str) -> pd.DataFrame:
     df = pd.DataFrame(all_data, columns=['Well', 'Time_s', 'OD'])
     return df
 
+def parse_excel_plate_reader_data(file_path: str) -> pd.DataFrame:
+    """
+    Parses raw plate reader data from an Excel file exported from the instrument.
+
+    Args:
+      file_path (str): The path to the input Excel file.
+
+    Returns:
+      A DataFrame with 'Well', 'Time_s', and 'OD' columns.
+    """
+    try:
+        # Read all sheets to find the data
+        excel_file = pd.ExcelFile(file_path)
+        
+        # Store all data from different time points
+        all_data = []
+        
+        # Process each sheet
+        for sheet_name in excel_file.sheet_names:
+            df = pd.read_excel(file_path, sheet_name=sheet_name)
+            
+            # Convert the DataFrame to a list of lists for easier processing
+            # Similar to how we process CSV files
+            rows = df.values.tolist()
+            
+            # First find all time points in the data
+            time_indices = []
+            time_values = []
+            
+            for i, row in enumerate(rows):
+                if isinstance(row[0], str) and 'Time [s]' in row[0]:
+                    try:
+                        # The time value should be in the second column
+                        time_value = float(row[1])
+                        time_indices.append(i)
+                        time_values.append(time_value)
+                    except (ValueError, IndexError):
+                        continue
+            
+            # Now process the data for each time point
+            for time_idx, current_time in zip(time_indices, time_values):
+                # Start from the row after the time header and look for row headers A-H
+                for i in range(time_idx + 1, len(rows)):
+                    row = rows[i]
+                    
+                    # Check if this row contains well data (starts with A-H)
+                    if len(row) > 0 and isinstance(row[0], str) and re.match(r'^[A-H]$', row[0]):
+                        row_letter = row[0]
+                        
+                        # Get OD values from columns 1-12
+                        for col_idx in range(1, min(13, len(row))):
+                            try:
+                                od_value = row[col_idx]
+                                if pd.notna(od_value):  # Skip NaN values
+                                    try:
+                                        od = float(od_value)
+                                        well = f"{row_letter}{col_idx}"
+                                        all_data.append([well, current_time, od])
+                                    except (ValueError, TypeError):
+                                        # Skip if value can't be converted to float
+                                        continue
+                            except IndexError:
+                                continue
+                    
+                    # If we hit another time point or blank row, move to the next time point
+                    elif len(row) == 0 or (isinstance(row[0], str) and 'Time [s]' in row[0]):
+                        break
+        
+        if not all_data:
+            print("[!] Error: No data could be parsed from the Excel file. Please check the input file format.")
+            sys.exit(1)
+            
+        df = pd.DataFrame(all_data, columns=['Well', 'Time_s', 'OD'])
+        return df
+    
+    except Exception as e:
+        print(f"[!] Error reading Excel file: {e}")
+        sys.exit(1)
+
 def add_conditions_from_map(df: pd.DataFrame, map_file_path: str) -> pd.DataFrame:
     """
     Adds a 'Condition' column to the DataFrame by merging it with a custom mapping file.
 
     Args:
       df (pd.DataFrame): The input DataFrame from parsing.
-      map_file_path (str): The path to the CSV file containing the well-to-condition map.
+      map_file_path (str): The path to the CSV or Excel file containing the well-to-condition map.
 
     Returns:
       The DataFrame with the added 'Condition' column.
     """
     try:
-        map_df = pd.read_csv(map_file_path)
+        # Determine file type and read accordingly
+        file_extension = os.path.splitext(map_file_path)[1].lower()
+        if file_extension in ['.xlsx', '.xls']:
+            map_df = pd.read_excel(map_file_path)
+        else:  # Default to CSV
+            map_df = pd.read_csv(map_file_path)
     except FileNotFoundError:
         print(f"[!] Error: The mapping file was not found at '{map_file_path}'")
+        sys.exit(1)
+    except Exception as e:
+        print(f"[!] Error reading mapping file: {e}")
         sys.exit(1)
 
     # Check for required columns in the mapping file
@@ -77,19 +182,19 @@ def add_conditions_from_map(df: pd.DataFrame, map_file_path: str) -> pd.DataFram
 def main():
     """Main function to parse arguments and run the data processing pipeline."""
     parser = argparse.ArgumentParser(
-        description="Process bacterial growth data from a plate reader CSV export.",
+        description="Process bacterial growth data from a plate reader CSV or Excel export.",
         formatter_class=argparse.RawTextHelpFormatter
     )
     parser.add_argument(
         "input_file",
         type=str,
-        help="Path to the input CSV file from the plate reader."
+        help="Path to the input file from the plate reader (CSV, XLSX, or XLS format)."
     )
     parser.add_argument(
         "--map",
         type=str,
         required=True, # This makes the map file a mandatory argument
-        help="[REQUIRED] Path to the CSV file that maps wells to conditions.\n"
+        help="[REQUIRED] Path to the CSV or Excel file that maps wells to conditions.\n"
              "The file must contain 'Well' and 'Condition' columns."
     )
     parser.add_argument(
