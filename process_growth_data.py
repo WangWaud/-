@@ -1,12 +1,14 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
+# Latest update: 25/10/06
 
 """
-OD600 Transformer
+OD600 Transformer V2
 
 This script processes data from microplate readers (OD600 measurements) and converts
 it into a structured format for further analysis. It supports both CSV and Excel
-file formats exported from microplate readers.
+file formats exported from microplate readers. This is V2 to handle the updated
+data format in the latest software version.
 """
 
 import os
@@ -20,7 +22,7 @@ from pathlib import Path
 def parse_args():
     """Parse command line arguments."""
     parser = argparse.ArgumentParser(
-        description="Process bacterial growth data from a plate reader CSV or Excel export."
+        description="Process bacterial growth data from a plate reader CSV or Excel export (V2 for updated format)."
     )
     
     parser.add_argument(
@@ -230,97 +232,55 @@ def process_cycle_data(data_rows, time_value):
     return result
 
 def process_excel_data(file_path):
-    """Process plate reader data from Excel format."""
+    """Process plate reader data from Excel format (updated for new table structure)."""
     try:
-        # Load all sheets to find which one contains the data
+        # Load the Excel file
         xl = pd.ExcelFile(file_path)
         
         all_data = []
         
-        # Try each sheet
-        for sheet_name in xl.sheet_names:
-            try:
-                # Read the Excel sheet as raw data without headers
-                df = pd.read_excel(file_path, sheet_name=sheet_name, header=None)
-                
-                # Look for time points and cycle data
-                time_points = []
-                cycle_starts = []
-                
-                for idx, row in df.iterrows():
-                    # Check if this row contains 'Time [s]'
-                    if isinstance(row[0], str) and 'Time [s]' in row[0]:
-                        # Get the time value
-                        if len(row) > 1 and pd.notna(row[1]):
-                            try:
-                                time_value = float(row[1])
-                                time_points.append(time_value)
-                                cycle_starts.append(idx)
-                                print(f"Found time point in Excel: {time_value} seconds at row {idx}")
-                            except (ValueError, TypeError):
-                                print(f"Warning: Could not convert Excel time value: {row[1]}")
-                
-                # If no time points found, skip this sheet
-                if not time_points:
-                    print(f"No time points found in sheet '{sheet_name}', skipping")
-                    continue
-                
-                print(f"Found {len(time_points)} time points in sheet '{sheet_name}'")
-                
-                # Process each cycle
-                for cycle_idx, start_idx in enumerate(cycle_starts):
-                    time_value = time_points[cycle_idx]
-                    
-                    # Find where the data rows start
-                    data_start_idx = None
-                    for i in range(start_idx, min(start_idx + 10, df.shape[0])):
-                        if isinstance(df.iloc[i, 0], str) and re.match(r'^[A-H]$', df.iloc[i, 0].strip()):
-                            data_start_idx = i
-                            break
-                    
-                    if data_start_idx is None:
-                        print(f"Warning: Could not find data rows for cycle at time {time_value}")
-                        continue
-                    
-                    # Process data rows for this cycle
-                    for row_idx in range(data_start_idx, min(data_start_idx + 8, df.shape[0])):  # Max 8 rows (A-H)
-                        row_id = df.iloc[row_idx, 0]
-                        
-                        if not isinstance(row_id, str) or not re.match(r'^[A-H]$', row_id.strip()):
-                            continue
-                        
-                        row_id = row_id.strip()
-                        
-                        # Process each well in the row
-                        for col_idx in range(1, min(13, df.shape[1])):
-                            od_value = df.iloc[row_idx, col_idx]
-                            
-                            # Skip empty or non-numeric values
-                            if pd.isna(od_value):
-                                continue
-                            
-                            # Convert to float if possible
-                            try:
-                                od = float(od_value)
-                                well = f"{row_id}{col_idx}"
-                                time_h = time_value / 3600.0  # Convert seconds to hours
-                                
-                                all_data.append({
-                                    'Well': well,
-                                    'Time_s': time_value,
-                                    'Time_h': time_h,
-                                    'OD': od
-                                })
-                            except (ValueError, TypeError):
-                                print(f"Warning: Could not convert OD value: {od_value}")
-            
-            except Exception as e:
-                print(f"Warning: Error processing sheet '{sheet_name}': {e}")
-                continue
+        # Assume the data is in the first sheet or "Result sheet"
+        sheet_name = xl.sheet_names[0] if 'Result sheet' not in xl.sheet_names else 'Result sheet'
+        
+        # Skip rows to start from the header of the OD600 table (adjust based on format, here skip 45 rows)
+        df = pd.read_excel(file_path, sheet_name=sheet_name, skiprows=45)
+        
+        # Expected columns: 'Cycle Nr.', 'Time [s]', 'Temp. [°C]', then 'A1' to 'H12'
+        if 'Cycle Nr.' not in df.columns or 'Time [s]' not in df.columns:
+            print("Error: Could not find expected columns in the Excel sheet.")
+            sys.exit(1)
+        
+        # Generate well list
+        rows = 'ABCDEFGH'
+        cols = range(1, 13)
+        wells = [f'{row}{col}' for row in rows for col in cols]
+        
+        # Filter valid data rows (where 'Cycle Nr.' is not NaN and numeric)
+        df = df[df['Cycle Nr.'].notna()]
+        df = df[pd.to_numeric(df['Cycle Nr.'], errors='coerce').notna()]
+        
+        print(f"Found {len(df)} cycles in the sheet.")
+        
+        # Process each cycle
+        for _, row in df.iterrows():
+            time_value = row['Time [s]']
+            time_h = time_value / 3600.0
+            for well in wells:
+                if well in row and pd.notna(row[well]):
+                    try:
+                        od = float(row[well])
+                        all_data.append({
+                            'Well': well,
+                            'Time_s': time_value,
+                            'Time_h': time_h,
+                            'OD': od
+                        })
+                    except ValueError:
+                        print(f"Warning: Could not convert OD value for {well}: {row[well]}")
         
         # Check if we found any data
         if not all_data:
-            print("Error: Could not find valid plate reader data in any Excel sheet.")
+            print("Error: Could not find valid plate reader data in the Excel sheet.")
             sys.exit(1)
         
         print(f"Processed {len(all_data)} data points from Excel file.")
